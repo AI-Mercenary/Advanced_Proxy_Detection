@@ -7,6 +7,7 @@ const App = () => {
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const detectionWindow = useRef([]);
+  const lastNoiseFlagTime = useRef(0);
 
   const referenceDescriptorsRef = useRef([]);
   const isMonitoringRef = useRef(false);
@@ -23,16 +24,28 @@ const App = () => {
   const [headPosition, setHeadPosition] = useState({ pitch: 0, yaw: 0, roll: 0 });
   const [eyeGaze, setEyeGaze] = useState({ vertical: 'center', horizontal: 'center', downTime: 0 });
   const [headMovementTime, setHeadMovementTime] = useState({ direction: '', time: 0 });
+  const [eventCounts, setEventCounts] = useState({
+    headLeft: 0,
+    headRight: 0,
+    headUp: 0,
+    headDown: 0,
+    multipleFaces: 0,
+    multipleVoices: 0,
+    highNoise: 0,
+  });
+  const [showSummary, setShowSummary] = useState(false);
+  const [summaryContent, setSummaryContent] = useState("");
 
   const TOLERANCE = 0.45;
   const NOISE_THRESHOLD_LOW = 0.2;
-  const NOISE_THRESHOLD_MEDIUM = 0.4;
-  const NOISE_THRESHOLD_HIGH = 0.6;
+  const NOISE_THRESHOLD_MEDIUM = 0.3;
+  const NOISE_THRESHOLD_HIGH = 0.5;
   const MULTIPLE_VOICES_THRESHOLD = 5;
-  const HEAD_MOVEMENT_THRESHOLD = 10; // Lowered from 12 for sensitivity
+  const HEAD_MOVEMENT_THRESHOLD = 10;
   const EYE_DOWN_THRESHOLD = 5;
   const HEAD_MOVEMENT_DURATION_THRESHOLD = 3;
   const DETECTION_FRAME_THRESHOLD = 3;
+  const NOISE_DEBOUNCE_MS = 1000;
 
   useEffect(() => {
     const loadModels = async () => {
@@ -74,6 +87,7 @@ const App = () => {
       audioStream.connect(analyserRef.current);
 
       setIsCameraOn(true);
+      setShowSummary(false);
       setStatusMessage("📸 Camera started. Begin reference capture.");
     } catch (error) {
       console.error("Error accessing devices:", error);
@@ -91,6 +105,33 @@ const App = () => {
       audioContextRef.current.close();
       audioContextRef.current = null;
     }
+
+    // Generate summary content
+    const summary = [
+      "Proxy Detection Summary Report",
+      "===========================",
+      "",
+      "Event Counts:",
+      `  Head Left: ${eventCounts.headLeft} times`,
+      `  Head Right: ${eventCounts.headRight} times`,
+      `  Head Up: ${eventCounts.headUp} times`,
+      `  Head Down: ${eventCounts.headDown} times`,
+      `  Multiple Faces: ${eventCounts.multipleFaces} times`,
+      `  Multiple Voices: ${eventCounts.multipleVoices} times`,
+      `  High Noise: ${eventCounts.highNoise} times`,
+      "",
+      `Total Proxy Detected: ${detectionCount}`,
+      `Object Status: ${objectDetected || "None"}`,
+      "",
+      "Proxy Events:",
+      ...proxyEvents.map((event) => `  ${event.type} detected at ${event.time}`),
+      "",
+      "Generated on: " + new Date().toLocaleString(),
+    ].join("\n");
+
+    setSummaryContent(summary);
+    setShowSummary(true);
+
     setIsCameraOn(false);
     setIsReferenceCaptured(false);
     referenceDescriptorsRef.current = [];
@@ -98,8 +139,32 @@ const App = () => {
     setAudioProxyDetected(false);
     setStatusMessage("⏹️ Camera stopped.");
     setShowFaceOverlay(false);
+    setEventCounts({
+      headLeft: 0,
+      headRight: 0,
+      headUp: 0,
+      headDown: 0,
+      multipleFaces: 0,
+      multipleVoices: 0,
+      highNoise: 0,
+    });
+    setProxyEvents([]);
+    setDetectionCount(0);
+    setObjectDetected(null);
     clearCanvas();
     detectionWindow.current = [];
+  };
+
+  const downloadReport = () => {
+    const blob = new Blob([summaryContent], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "proxy_detection_report.txt";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const drawFaceOverlay = useCallback(() => {
@@ -292,27 +357,35 @@ const App = () => {
       const volume = Math.sqrt(dataArray.reduce((sum, val) => sum + val ** 2, 0) / bufferLength) / 255;
       const peakCount = dataArray.filter((val) => val > 150).length;
 
-      let audioLevel = "low";
-      if (volume > NOISE_THRESHOLD_HIGH) audioLevel = "high";
-      else if (volume > NOISE_THRESHOLD_MEDIUM) audioLevel = "medium";
-
       const isMultipleVoices = peakCount > MULTIPLE_VOICES_THRESHOLD;
+      const isHighNoise = volume > NOISE_THRESHOLD_HIGH;
+      const currentTime = Date.now();
 
-      setAudioProxyDetected(isMultipleVoices || audioLevel !== "low");
+      setAudioProxyDetected(isMultipleVoices || volume > NOISE_THRESHOLD_MEDIUM);
 
       if (isMultipleVoices) {
-        setStatusMessage("🚨 Multiple Voices Detected!");
+        setEventCounts((prev) => ({ ...prev, multipleVoices: prev.multipleVoices + 1 }));
         setProxyEvents((prev) => [
           ...prev,
           { type: "Multiple Voices", time: new Date().toLocaleTimeString() },
         ]);
-      } else if (audioLevel !== "low") {
-        setStatusMessage(`🚨 Audio Level: ${audioLevel.toUpperCase()}!`);
+      }
+
+      if (isHighNoise && currentTime - lastNoiseFlagTime.current >= NOISE_DEBOUNCE_MS) {
+        setEventCounts((prev) => ({ ...prev, highNoise: prev.highNoise + 1 }));
         setProxyEvents((prev) => [
           ...prev,
-          { type: `Audio Level: ${audioLevel.toUpperCase()}`, time: new Date().toLocaleTimeString() },
+          { type: "High Noise", time: new Date().toLocaleTimeString() },
         ]);
+        lastNoiseFlagTime.current = currentTime;
       }
+
+      console.log("Audio Debug:", {
+        volume: volume.toFixed(3),
+        peakCount,
+        isMultipleVoices,
+        isHighNoise,
+      });
 
       if (isMonitoringRef.current) {
         requestAnimationFrame(detectAudio);
@@ -340,7 +413,14 @@ const App = () => {
 
           let newExpressions = {};
           let isProxyFound = detections.length > 1;
-          let headMovementMessage = "";
+
+          if (isProxyFound) {
+            setEventCounts((prev) => ({ ...prev, multipleFaces: prev.multipleFaces + 1 }));
+            setProxyEvents((prev) => [
+              ...prev,
+              { type: "Multiple Faces", time: new Date().toLocaleTimeString() },
+            ]);
+          }
 
           detections.forEach((det, index) => {
             newExpressions[`Face ${index + 1}`] = getMostLikelyExpression(det.expressions);
@@ -364,11 +444,15 @@ const App = () => {
 
             console.log("Head Direction:", headDirection);
 
-            if (headDirection) {
-              headMovementMessage = `🚨 Head Moving ${headDirection.toUpperCase()}!`;
-            }
-
             setHeadMovementTime((prev) => {
+              if (headDirection && headDirection !== prev.direction) {
+                setEventCounts((prevCounts) => ({
+                  ...prevCounts,
+                  [`head${headDirection.charAt(0).toUpperCase() + headDirection.slice(1)}`]:
+                    prevCounts[`head${headDirection.charAt(0).toUpperCase() + headDirection.slice(1)}`] + 1,
+                }));
+                return { direction: headDirection, time: 0 };
+              }
               if (headDirection && headDirection === prev.direction) {
                 const newTime = prev.time + 1 / 60;
                 if (newTime > HEAD_MOVEMENT_DURATION_THRESHOLD) {
@@ -379,7 +463,7 @@ const App = () => {
                 }
                 return { direction: headDirection, time: newTime };
               }
-              return headDirection ? { direction: headDirection, time: 0 } : { direction: '', time: 0 };
+              return { direction: '', time: 0 };
             });
 
             setEyeGaze((prev) => {
@@ -400,22 +484,12 @@ const App = () => {
 
           setFaceExpressions(newExpressions);
           setProxyDetected(isProxyFound);
-
-          // Set status message: prioritize multiple faces, then head movement
-          if (isProxyFound) {
-            setStatusMessage("🚨 Unauthorized second face detected!");
-          } else if (headMovementMessage) {
-            setStatusMessage(headMovementMessage);
-          } else {
-            setStatusMessage("");
-          }
         } else {
           clearCanvas();
           setFaceExpressions({});
           setHeadPosition({ pitch: 0, yaw: 0, roll: 0 });
           setEyeGaze({ vertical: 'center', horizontal: 'center', downTime: 0 });
           setHeadMovementTime({ direction: '', time: 0 });
-          setStatusMessage("");
         }
       } catch (error) {
         console.error("Error during face detection:", error);
@@ -436,14 +510,12 @@ const App = () => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
 
-    // Draw edge pixels (red rectangles)
     edgePixels.forEach(({ x, y }) => {
       ctx.strokeStyle = "red";
       ctx.lineWidth = 1;
       ctx.strokeRect(x, y, 5, 5);
     });
 
-    // Draw uniform cluster pixels (blue rectangles)
     uniformPixels.forEach(({ x, y }) => {
       ctx.strokeStyle = "blue";
       ctx.lineWidth = 1;
@@ -491,7 +563,7 @@ const App = () => {
           i >= canvas.width * 4
             ? Math.abs(r - data[i - canvas.width * 4]) +
               Math.abs(g - data[i - canvas.width * 4 + 1]) +
-              Math.abs(b - data[i - canvas.width * 4 + 2])
+              Math.abs(b - data[i - 4 + 2])
             : 0;
 
         if (horizontalDiff > 80 || verticalDiff > 80) {
@@ -505,8 +577,6 @@ const App = () => {
             uniformPixels.push({ x, y });
             consecutiveUniform = 0;
           }
-        } else {
-          // Don't reset consecutiveUniform for non-edge, non-uniform pixels
         }
       }
 
@@ -575,6 +645,17 @@ const App = () => {
     setAudioProxyDetected(false);
     setFaceExpressions({});
     setStatusMessage("");
+    setEventCounts({
+      headLeft: 0,
+      headRight: 0,
+      headUp: 0,
+      headDown: 0,
+      multipleFaces: 0,
+      multipleVoices: 0,
+      highNoise: 0,
+    });
+    setProxyEvents([]);
+    setShowSummary(false);
     startFaceDetection();
     startAudioDetection();
     detectionWindow.current = [];
@@ -673,22 +754,79 @@ const App = () => {
         </div>
       )}
 
-      <div style={{ marginTop: "20px" }}>
-        <h3>Proxy Detection Events:</h3>
-        <ul>
-          {proxyEvents.map((event, index) => (
-            <li key={index}>
-              {event.type} detected at {event.time}
+      {isCameraOn && (
+        <div
+          style={{
+            marginTop: "20px",
+            maxWidth: "640px",
+            marginLeft: "auto",
+            marginRight: "auto",
+            border: "1px solid #ccc",
+            borderRadius: "8px",
+            padding: "15px",
+            backgroundColor: "#f9f9f9",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: "10px" }}>Event Counts</h3>
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            <li style={{ marginBottom: "8px" }}>
+              Head Left: <strong>{eventCounts.headLeft}</strong> times
             </li>
-          ))}
-        </ul>
-      </div>
+            <li style={{ marginBottom: "8px" }}>
+              Head Right: <strong>{eventCounts.headRight}</strong> times
+            </li>
+            <li style={{ marginBottom: "8px" }}>
+              Head Up: <strong>{eventCounts.headUp}</strong> times
+            </li>
+            <li style={{ marginBottom: "8px" }}>
+              Head Down: <strong>{eventCounts.headDown}</strong> times
+            </li>
+            <li style={{ marginBottom: "8px" }}>
+              Multiple Faces: <strong>{eventCounts.multipleFaces}</strong> times
+            </li>
+            <li style={{ marginBottom: "8px" }}>
+              Multiple Voices: <strong>{eventCounts.multipleVoices}</strong> times
+            </li>
+            <li style={{ marginBottom: "8px" }}>
+              High Noise: <strong>{eventCounts.highNoise}</strong> times
+            </li>
+          </ul>
+        </div>
+      )}
 
       <div style={{ marginTop: "20px" }}>
         <h3>Detection Summary:</h3>
         <p>Total Proxy Detected: <strong>{detectionCount}</strong></p>
         <p>Object Status: <strong>{objectDetected || "None"}</strong></p>
       </div>
+
+      {showSummary && (
+        <div
+          style={{
+            marginTop: "20px",
+            maxWidth: "640px",
+            marginLeft: "auto",
+            marginRight: "auto",
+            border: "1px solid #ccc",
+            borderRadius: "8px",
+            padding: "15px",
+            backgroundColor: "#f9f9f9",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: "10px" }}>Summary Report</h3>
+          <pre style={{ textAlign: "left", whiteSpace: "pre-wrap", fontSize: "14px" }}>{summaryContent}</pre>
+          <div style={{ marginTop: "10px" }}>
+            <button onClick={downloadReport} style={buttonStyle}>
+              📥 Download Report
+            </button>
+            <button onClick={() => setShowSummary(false)} style={{ ...buttonStyle, backgroundColor: "#ff4444" }}>
+              ❌ Close
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: "20px" }}>
         <h3>Head Position:</h3>
