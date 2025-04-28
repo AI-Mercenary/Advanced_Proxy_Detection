@@ -317,7 +317,7 @@ const App = () => {
     const leftEye = landmarks.getLeftEye();
     const rightEye = landmarks.getRightEye();
 
-    const leftCenter = {
+    const left municípios = {
       x: leftEye.reduce((sum, p) => sum + p.x, 0) / 6,
       y: leftEye.reduce((sum, p) => sum + p.y, 0) / 6,
     };
@@ -794,12 +794,6 @@ const App = () => {
           </ul>
         </div>
       )}
-
-      <div style={{ marginTop: "20px" }}>
-        <h3>Detection Summary:</h3>
-        <p>Total Proxy Detected: <strong>{detectionCount}</strong></p>
-        <p>Object Status: <strong>{objectDetected || "None"}</strong></p>
-      </div>
 
       {showSummary && (
         <div
