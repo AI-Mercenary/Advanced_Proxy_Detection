@@ -106,7 +106,7 @@ const App = () => {
       audioContextRef.current = null;
     }
 
-    // Generate summary content
+    // Generate summary content without detectionCount and objectDetected
     const summary = [
       "Proxy Detection Summary Report",
       "===========================",
@@ -119,9 +119,6 @@ const App = () => {
       `  Multiple Faces: ${eventCounts.multipleFaces} times`,
       `  Multiple Voices: ${eventCounts.multipleVoices} times`,
       `  High Noise: ${eventCounts.highNoise} times`,
-      "",
-      `Total Proxy Detected: ${detectionCount}`,
-      `Object Status: ${objectDetected || "None"}`,
       "",
       "Proxy Events:",
       ...proxyEvents.map((event) => `  ${event.type} detected at ${event.time}`),
@@ -317,7 +314,7 @@ const App = () => {
     const leftEye = landmarks.getLeftEye();
     const rightEye = landmarks.getRightEye();
 
-    const left municípios = {
+    const leftCenter = {
       x: leftEye.reduce((sum, p) => sum + p.x, 0) / 6,
       y: leftEye.reduce((sum, p) => sum + p.y, 0) / 6,
     };
